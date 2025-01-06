@@ -4,7 +4,7 @@ import requests
 
 # Define your Garmin credentials
 GARMIN_USERNAME = "paul.vanderelst@hotmail.com"
-GARMIN_PASSWORD = "Polar7600"
+GARMIN_PASSWORD = "Polar7500"
 
 # Define the Flask upload endpoint on PythonAnywhere
 PYTHONANYWHERE_UPLOAD_URL = "https://SitePaul.pythonanywhere.com/upload"
