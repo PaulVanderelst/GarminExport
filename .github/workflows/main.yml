@@ -3,7 +3,8 @@ name: Schedule Python Script
 on:
   schedule:
     # Schedule the script using cron syntax (e.g., every day at midnight)
-    - cron: '0 * * * *'
+     - cron: '0 16-22 * * 1-5'  # Weekdays (Monday to Friday) from 16:00 to 22:00
+     - cron: '0 9-20 * * 6-7'   # Weekends (Saturday and Sunday) from 09:00 to 20:00
   workflow_dispatch: # Allows manual triggering of the workflow
     {}
 
