@@ -11,20 +11,40 @@ from pathlib import Path
 # CONFIG
 # ======================
 
-GARMIN_USERNAME = "Paul.vanderelst@hotmail.com"
-GARMIN_PASSWORD = "Polar7500"
+GARMIN_USERNAME = os.getenv("GARMIN_USERNAME")
+GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD")
 
 BASE_URL = "https://SitePaul.pythonanywhere.com"
 DOWNLOAD_URL = f"{BASE_URL}/download/garmin_activities.csv"
 UPLOAD_URL = f"{BASE_URL}/upload"
 
 SESSION_FILE = Path("garmin_session.pkl")
+LOCAL_CSV = "garmin_activities.csv"
 LOCK_FILE = "/tmp/garmin_job.lock"
 
-LOCAL_CSV = "garmin_activities.csv"
+RATE_LIMIT_FILE = "garmin_rate_limit.lock"
 
-MAX_LOGIN_ATTEMPTS = 3
 PAGE_LIMIT = 20
+
+# ======================
+# RATE LIMIT HANDLING
+# ======================
+
+def is_rate_limited():
+    if not os.path.exists(RATE_LIMIT_FILE):
+        return False
+
+    try:
+        with open(RATE_LIMIT_FILE, "r") as f:
+            ts = float(f.read())
+        return (time.time() - ts) < 3600  # 1h cooldown
+    except:
+        return False
+
+
+def set_rate_limited():
+    with open(RATE_LIMIT_FILE, "w") as f:
+        f.write(str(time.time()))
 
 
 # ======================
@@ -33,7 +53,7 @@ PAGE_LIMIT = 20
 
 def acquire_lock():
     if os.path.exists(LOCK_FILE):
-        print("Job already running — exiting.")
+        print("Job already running — exit")
         sys.exit(0)
     open(LOCK_FILE, "w").close()
 
@@ -44,7 +64,7 @@ def release_lock():
 
 
 # ======================
-# DOWNLOAD EXISTING CSV
+# DOWNLOAD CSV (source of truth)
 # ======================
 
 def download_existing_csv():
@@ -54,15 +74,15 @@ def download_existing_csv():
         if r.status_code == 200:
             with open(LOCAL_CSV, "wb") as f:
                 f.write(r.content)
-            print("Existing CSV downloaded")
+            print("CSV downloaded")
         else:
-            print("No existing CSV found — starting fresh")
+            print("No remote CSV found — starting fresh")
 
     except Exception as e:
         print(f"Download error: {e}")
 
 
-def load_existing_activity_ids():
+def load_existing_ids():
     ids = set()
 
     if not os.path.exists(LOCAL_CSV):
@@ -78,10 +98,14 @@ def load_existing_activity_ids():
 
 
 # ======================
-# GARMIN AUTH (SAFE)
+# GARMIN SESSION (STABLE)
 # ======================
 
 def get_garmin_client():
+    if is_rate_limited():
+        print("🚫 Global rate limit active — skipping Garmin")
+        return None
+
     client = garminconnect.Garmin(GARMIN_USERNAME, GARMIN_PASSWORD)
 
     # reuse session
@@ -89,30 +113,31 @@ def get_garmin_client():
         try:
             with open(SESSION_FILE, "rb") as f:
                 client = pickle.load(f)
-            print("Reusing Garmin session")
+            print("Session reused")
             return client
-        except Exception:
-            print("Session invalid — relogin required")
+        except:
+            print("Session invalid")
 
-    for attempt in range(MAX_LOGIN_ATTEMPTS):
+    # only minimal login attempts
+    for _ in range(2):  # VERY IMPORTANT: low retry
         try:
             client.login()
 
             with open(SESSION_FILE, "wb") as f:
                 pickle.dump(client, f)
 
-            print("Garmin login successful")
+            print("Login success")
             return client
 
         except garminconnect.GarminConnectTooManyRequestsError:
-            print("🚫 Garmin rate limit (login) — aborting login")
+            print("🚫 Garmin SSO blocked (429)")
+            set_rate_limited()
             return None
 
         except Exception as e:
             print(f"Login error: {e}")
             time.sleep(5)
 
-    print("❌ Garmin login failed after retries")
     return None
 
 
@@ -124,7 +149,7 @@ def fetch_new_activities(existing_ids):
     client = get_garmin_client()
 
     if client is None:
-        print("Skipping Garmin fetch (no session)")
+        print("Skipping fetch (no Garmin access)")
         return []
 
     start = 0
@@ -133,9 +158,12 @@ def fetch_new_activities(existing_ids):
     while True:
         try:
             activities = client.get_activities(start, PAGE_LIMIT)
+
         except garminconnect.GarminConnectTooManyRequestsError:
-            print("🚫 Rate limit during fetch — stopping early")
+            print("🚫 Rate limit during fetch")
+            set_rate_limited()
             break
+
         except Exception as e:
             print(f"Fetch error: {e}")
             break
@@ -143,26 +171,26 @@ def fetch_new_activities(existing_ids):
         if not activities:
             break
 
-        for activity in activities:
-            aid = str(activity.get("activityId"))
+        for a in activities:
+            aid = str(a.get("activityId"))
 
             if aid in existing_ids:
-                print("Reached already known activities — stopping")
+                print("Reached known activity — stop")
                 return new_activities
 
-            new_activities.append(activity)
+            new_activities.append(a)
 
         start += PAGE_LIMIT
 
-    print(f"{len(new_activities)} new activities found")
+    print(f"{len(new_activities)} new activities")
     return new_activities
 
 
 # ======================
-# MERGE CSV
+# CSV MERGE
 # ======================
 
-def merge_and_save(new_activities):
+def merge_csv(new_activities):
     rows = []
 
     if os.path.exists(LOCAL_CSV):
@@ -182,40 +210,39 @@ def merge_and_save(new_activities):
     if not rows:
         rows.append(header)
 
-    for activity in reversed(new_activities):
+    for a in reversed(new_activities):
         rows.append([
-            activity.get("activityId"),
-            activity.get("activityName"),
-            activity.get("startTimeLocal"),
-            activity.get("duration"),
-            activity.get("distance"),
-            activity.get("averageSpeed"),
-            activity.get("calories")
+            a.get("activityId"),
+            a.get("activityName"),
+            a.get("startTimeLocal"),
+            a.get("duration"),
+            a.get("distance"),
+            a.get("averageSpeed"),
+            a.get("calories")
         ])
 
     with open(LOCAL_CSV, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerows(rows)
+        csv.writer(f).writerows(rows)
 
-    print("CSV updated successfully")
+    print("CSV updated")
 
 
 # ======================
 # UPLOAD
 # ======================
 
-def upload_csv():
+def upload():
     try:
         with open(LOCAL_CSV, "rb") as f:
             r = requests.post(UPLOAD_URL, files={"file": f}, timeout=30)
 
         if r.status_code == 200:
-            print("Upload successful")
+            print("Upload OK")
         else:
-            print(f"Upload failed: {r.text}")
+            print(f"Upload error: {r.text}")
 
     except Exception as e:
-        print(f"Upload error: {e}")
+        print(f"Upload failed: {e}")
 
 
 # ======================
@@ -227,16 +254,16 @@ def main():
 
     try:
         download_existing_csv()
-        existing_ids = load_existing_activity_ids()
+        existing_ids = load_existing_ids()
 
         new_activities = fetch_new_activities(existing_ids)
 
         if not new_activities:
-            print("No update needed")
+            print("No update — exit cleanly")
             return
 
-        merge_and_save(new_activities)
-        upload_csv()
+        merge_csv(new_activities)
+        upload()
 
     finally:
         release_lock()
