@@ -11,17 +11,20 @@ from pathlib import Path
 # CONFIG
 # ======================
 
-GARMIN_USERNAME = "paul.vanderelst@hotmail.com"
-GARMIN_PASSWORD = "Polar7500"
+GARMIN_USERNAME = os.getenv("GARMIN_USERNAME")
+GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD")
 
-PYTHONANYWHERE_UPLOAD_URL = "https://SitePaul.pythonanywhere.com/upload"
+BASE_URL = "https://SitePaul.pythonanywhere.com"
+DOWNLOAD_URL = f"{BASE_URL}/download/garmin_activities.csv"
+UPLOAD_URL = f"{BASE_URL}/upload"
 
 SESSION_FILE = Path("garmin_session.pkl")
 LOCK_FILE = "/tmp/garmin_job.lock"
+LOCAL_CSV = "garmin_activities.csv"
 
 
 # ======================
-# LOCK (CRON SAFETY)
+# LOCK
 # ======================
 
 def acquire_lock():
@@ -37,23 +40,55 @@ def release_lock():
 
 
 # ======================
-# GARMIN AUTH (SAFE)
+# DOWNLOAD EXISTING CSV
+# ======================
+
+def download_existing_csv():
+    try:
+        response = requests.get(DOWNLOAD_URL, timeout=30)
+
+        if response.status_code == 200:
+            with open(LOCAL_CSV, "wb") as f:
+                f.write(response.content)
+            print("Existing CSV downloaded")
+        else:
+            print("No existing CSV found, starting fresh")
+
+    except Exception as e:
+        print(f"Download failed: {e}")
+
+
+def load_existing_activity_ids():
+    ids = set()
+
+    if not os.path.exists(LOCAL_CSV):
+        return ids
+
+    with open(LOCAL_CSV, newline="", encoding="utf-8") as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            ids.add(row["Activity ID"])
+
+    print(f"{len(ids)} existing activities loaded")
+    return ids
+
+
+# ======================
+# GARMIN AUTH
 # ======================
 
 def get_garmin_client():
     client = garminconnect.Garmin(GARMIN_USERNAME, GARMIN_PASSWORD)
 
-    # Try reuse session
     if SESSION_FILE.exists():
         try:
             with open(SESSION_FILE, "rb") as f:
                 client = pickle.load(f)
-            print("Reusing saved Garmin session")
+            print("Reusing saved session")
             return client
         except Exception:
-            print("Saved session invalid — re-authenticating")
+            print("Session invalid")
 
-    # Fresh login with exponential backoff
     for attempt in range(5):
         try:
             client.login()
@@ -61,75 +96,108 @@ def get_garmin_client():
             with open(SESSION_FILE, "wb") as f:
                 pickle.dump(client, f)
 
-            print("Login successful (session cached)")
+            print("Login successful")
             return client
 
         except garminconnect.GarminConnectTooManyRequestsError:
             wait = 60 * (2 ** attempt)
-            print(f"Rate limited by Garmin — retrying in {wait}s")
+            print(f"Rate limited, retry in {wait}s")
             time.sleep(wait)
 
         except Exception as e:
-            print(f"Login error: {e}")
+            print(e)
             time.sleep(5)
 
-    raise Exception("Failed to authenticate after multiple attempts")
+    raise Exception("Garmin login failed")
 
 
 # ======================
-# EXPORT ACTIVITIES
+# FETCH NEW ACTIVITIES
 # ======================
 
-def export_garmin_activities():
-    try:
-        client = get_garmin_client()
+def fetch_new_activities(existing_ids):
+    client = get_garmin_client()
 
-        # keep range moderate to reduce load
-        activities = client.get_activities(0, 200)
+    start = 0
+    limit = 20
+    new_activities = []
+    stop = False
 
-        output_file = "garmin_activities.csv"
+    while not stop:
+        activities = client.get_activities(start, limit)
 
-        with open(output_file, "w", newline="", encoding="utf-8") as file:
-            writer = csv.writer(file)
+        if not activities:
+            break
 
-            writer.writerow([
-                "Activity ID",
-                "Activity Name",
-                "Start Time",
-                "Duration (s)",
-                "Distance (m)",
-                "Average Speed (m/s)",
-                "Calories"
-            ])
+        for activity in activities:
+            activity_id = str(activity.get("activityId"))
 
-            for activity in activities:
-                writer.writerow([
-                    activity.get("activityId"),
-                    activity.get("activityName"),
-                    activity.get("startTimeLocal"),
-                    activity.get("duration"),
-                    activity.get("distance"),
-                    activity.get("averageSpeed"),
-                    activity.get("calories")
-                ])
+            if activity_id in existing_ids:
+                stop = True
+                break
 
-        print(f"Export complete: {len(activities)} activities")
+            new_activities.append(activity)
 
-        upload_to_pythonanywhere(output_file)
+        start += limit
 
-    except Exception as e:
-        print(f"Export failed: {e}")
+    print(f"{len(new_activities)} new activities found")
+    return new_activities
+
+
+# ======================
+# MERGE + SAVE CSV
+# ======================
+
+def merge_and_save(new_activities):
+    rows = []
+
+    # Load existing data
+    if os.path.exists(LOCAL_CSV):
+        with open(LOCAL_CSV, newline="", encoding="utf-8") as file:
+            reader = csv.reader(file)
+            rows = list(reader)
+
+    header = [
+        "Activity ID",
+        "Activity Name",
+        "Start Time",
+        "Duration (s)",
+        "Distance (m)",
+        "Average Speed (m/s)",
+        "Calories"
+    ]
+
+    if not rows:
+        rows.append(header)
+
+    # Append new activities (chronological order)
+    for activity in reversed(new_activities):
+        rows.append([
+            activity.get("activityId"),
+            activity.get("activityName"),
+            activity.get("startTimeLocal"),
+            activity.get("duration"),
+            activity.get("distance"),
+            activity.get("averageSpeed"),
+            activity.get("calories")
+        ])
+
+    with open(LOCAL_CSV, "w", newline="", encoding="utf-8") as file:
+        writer = csv.writer(file)
+        writer.writerows(rows)
+
+    print("CSV updated")
 
 
 # ======================
 # UPLOAD
 # ======================
 
-def upload_to_pythonanywhere(file_path):
+def upload_csv():
     try:
-        with open(file_path, "rb") as file:
+        with open(LOCAL_CSV, "rb") as file:
             response = requests.post(
-                PYTHONANYWHERE_UPLOAD_URL,
+                UPLOAD_URL,
                 files={"file": file},
                 timeout=30
             )
@@ -147,9 +215,24 @@ def upload_to_pythonanywhere(file_path):
 # MAIN
 # ======================
 
-if __name__ == "__main__":
+def main():
     acquire_lock()
+
     try:
-        export_garmin_activities()
+        download_existing_csv()
+        existing_ids = load_existing_activity_ids()
+        new_activities = fetch_new_activities(existing_ids)
+
+        if not new_activities:
+            print("Nothing to update")
+            return
+
+        merge_and_save(new_activities)
+        upload_csv()
+
     finally:
         release_lock()
+
+
+if __name__ == "__main__":
+    main()
