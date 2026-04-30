@@ -11,8 +11,8 @@ from pathlib import Path
 # CONFIG
 # ======================
 
-GARMIN_USERNAME = os.getenv("GARMIN_USERNAME")
-GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD")
+GARMIN_USERNAME = "paul.vanderelst@hotmail.com"
+GARMIN_PASSWORD = "Polar7500"
 
 BASE_URL = "https://SitePaul.pythonanywhere.com"
 DOWNLOAD_URL = f"{BASE_URL}/download/garmin_activities.csv"
