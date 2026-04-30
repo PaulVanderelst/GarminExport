@@ -11,7 +11,7 @@ from pathlib import Path
 # CONFIG
 # ======================
 
-GARMIN_USERNAME = "paul.vanderelst@hotmail.com"
+GARMIN_USERNAME = "Paul.vanderelst@hotmail.com"
 GARMIN_PASSWORD = "Polar7500"
 
 BASE_URL = "https://SitePaul.pythonanywhere.com"
@@ -20,7 +20,11 @@ UPLOAD_URL = f"{BASE_URL}/upload"
 
 SESSION_FILE = Path("garmin_session.pkl")
 LOCK_FILE = "/tmp/garmin_job.lock"
+
 LOCAL_CSV = "garmin_activities.csv"
+
+MAX_LOGIN_ATTEMPTS = 3
+PAGE_LIMIT = 20
 
 
 # ======================
@@ -45,17 +49,17 @@ def release_lock():
 
 def download_existing_csv():
     try:
-        response = requests.get(DOWNLOAD_URL, timeout=30)
+        r = requests.get(DOWNLOAD_URL, timeout=30)
 
-        if response.status_code == 200:
+        if r.status_code == 200:
             with open(LOCAL_CSV, "wb") as f:
-                f.write(response.content)
+                f.write(r.content)
             print("Existing CSV downloaded")
         else:
-            print("No existing CSV found, starting fresh")
+            print("No existing CSV found — starting fresh")
 
     except Exception as e:
-        print(f"Download failed: {e}")
+        print(f"Download error: {e}")
 
 
 def load_existing_activity_ids():
@@ -64,98 +68,106 @@ def load_existing_activity_ids():
     if not os.path.exists(LOCAL_CSV):
         return ids
 
-    with open(LOCAL_CSV, newline="", encoding="utf-8") as file:
-        reader = csv.DictReader(file)
+    with open(LOCAL_CSV, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
         for row in reader:
-            ids.add(row["Activity ID"])
+            ids.add(str(row["Activity ID"]))
 
     print(f"{len(ids)} existing activities loaded")
     return ids
 
 
 # ======================
-# GARMIN AUTH
+# GARMIN AUTH (SAFE)
 # ======================
 
 def get_garmin_client():
     client = garminconnect.Garmin(GARMIN_USERNAME, GARMIN_PASSWORD)
 
+    # reuse session
     if SESSION_FILE.exists():
         try:
             with open(SESSION_FILE, "rb") as f:
                 client = pickle.load(f)
-            print("Reusing saved session")
+            print("Reusing Garmin session")
             return client
         except Exception:
-            print("Session invalid")
+            print("Session invalid — relogin required")
 
-    for attempt in range(5):
+    for attempt in range(MAX_LOGIN_ATTEMPTS):
         try:
             client.login()
 
             with open(SESSION_FILE, "wb") as f:
                 pickle.dump(client, f)
 
-            print("Login successful")
+            print("Garmin login successful")
             return client
 
         except garminconnect.GarminConnectTooManyRequestsError:
-            wait = 60 * (2 ** attempt)
-            print(f"Rate limited, retry in {wait}s")
-            time.sleep(wait)
+            print("🚫 Garmin rate limit (login) — aborting login")
+            return None
 
         except Exception as e:
-            print(e)
+            print(f"Login error: {e}")
             time.sleep(5)
 
-    raise Exception("Garmin login failed")
+    print("❌ Garmin login failed after retries")
+    return None
 
 
 # ======================
-# FETCH NEW ACTIVITIES
+# FETCH INCREMENTAL DATA
 # ======================
 
 def fetch_new_activities(existing_ids):
     client = get_garmin_client()
 
-    start = 0
-    limit = 20
-    new_activities = []
-    stop = False
+    if client is None:
+        print("Skipping Garmin fetch (no session)")
+        return []
 
-    while not stop:
-        activities = client.get_activities(start, limit)
+    start = 0
+    new_activities = []
+
+    while True:
+        try:
+            activities = client.get_activities(start, PAGE_LIMIT)
+        except garminconnect.GarminConnectTooManyRequestsError:
+            print("🚫 Rate limit during fetch — stopping early")
+            break
+        except Exception as e:
+            print(f"Fetch error: {e}")
+            break
 
         if not activities:
             break
 
         for activity in activities:
-            activity_id = str(activity.get("activityId"))
+            aid = str(activity.get("activityId"))
 
-            if activity_id in existing_ids:
-                stop = True
-                break
+            if aid in existing_ids:
+                print("Reached already known activities — stopping")
+                return new_activities
 
             new_activities.append(activity)
 
-        start += limit
+        start += PAGE_LIMIT
 
     print(f"{len(new_activities)} new activities found")
     return new_activities
 
 
 # ======================
-# MERGE + SAVE CSV
+# MERGE CSV
 # ======================
 
 def merge_and_save(new_activities):
     rows = []
 
-    # Load existing data
     if os.path.exists(LOCAL_CSV):
-        with open(LOCAL_CSV, newline="", encoding="utf-8") as file:
-            reader = csv.reader(file)
-            rows = list(reader)
+        with open(LOCAL_CSV, newline="", encoding="utf-8") as f:
+            rows = list(csv.reader(f))
 
     header = [
         "Activity ID",
@@ -170,7 +182,6 @@ def merge_and_save(new_activities):
     if not rows:
         rows.append(header)
 
-    # Append new activities (chronological order)
     for activity in reversed(new_activities):
         rows.append([
             activity.get("activityId"),
@@ -182,11 +193,11 @@ def merge_and_save(new_activities):
             activity.get("calories")
         ])
 
-    with open(LOCAL_CSV, "w", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file)
+    with open(LOCAL_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
         writer.writerows(rows)
 
-    print("CSV updated")
+    print("CSV updated successfully")
 
 
 # ======================
@@ -195,17 +206,13 @@ def merge_and_save(new_activities):
 
 def upload_csv():
     try:
-        with open(LOCAL_CSV, "rb") as file:
-            response = requests.post(
-                UPLOAD_URL,
-                files={"file": file},
-                timeout=30
-            )
+        with open(LOCAL_CSV, "rb") as f:
+            r = requests.post(UPLOAD_URL, files={"file": f}, timeout=30)
 
-        if response.status_code == 200:
+        if r.status_code == 200:
             print("Upload successful")
         else:
-            print(f"Upload failed: {response.text}")
+            print(f"Upload failed: {r.text}")
 
     except Exception as e:
         print(f"Upload error: {e}")
@@ -221,10 +228,11 @@ def main():
     try:
         download_existing_csv()
         existing_ids = load_existing_activity_ids()
+
         new_activities = fetch_new_activities(existing_ids)
 
         if not new_activities:
-            print("Nothing to update")
+            print("No update needed")
             return
 
         merge_and_save(new_activities)
