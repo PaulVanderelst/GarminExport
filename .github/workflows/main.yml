@@ -32,6 +32,6 @@ jobs:
         env:
           FLASK_UPLOAD_URL: ${{ secrets.FLASK_UPLOAD_URL }}
         run: |
-          curl -f -X POST "$FLASK_UPLOAD_URL/upload" \
+          curl -X POST "$FLASK_UPLOAD_URL/upload" \
             -F "file=@data/garmin_activities.csv" \
             --fail-with-body
