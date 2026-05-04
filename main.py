@@ -8,7 +8,7 @@ from garminconnect import Garmin
 EMAIL    = os.environ["GARMIN_EMAIL"]
 PASSWORD = os.environ["GARMIN_PASSWORD"]
 
-OUTPUT = Path("data/activities.csv")
+OUTPUT = Path("data/garmin_activities.csv")
 OUTPUT.parent.mkdir(parents=True, exist_ok=True)
 
 # Colonnes à conserver dans le CSV
