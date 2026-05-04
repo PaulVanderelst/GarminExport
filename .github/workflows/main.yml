@@ -28,10 +28,10 @@ jobs:
           GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
         run: python scripts/fetch_garmin.py
 
-      - name: Commit & push CSV
+      - name: Upload CSV to Flask server
+        env:
+          FLASK_UPLOAD_URL: ${{ secrets.FLASK_UPLOAD_URL }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/activities.csv
-          git diff --staged --quiet || git commit -m "chore: update Garmin activities $(date -u +%Y-%m-%d)"
-          git push
+          curl -f -X POST "$FLASK_UPLOAD_URL/upload" \
+            -F "file=@data/garmin_activities.csv" \
+            --fail-with-body
