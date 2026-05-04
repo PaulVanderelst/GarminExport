@@ -26,6 +26,7 @@ jobs:
         env:
           GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
           GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+          FLASK_UPLOAD_URL: ${{ secrets.FLASK_UPLOAD_URL }}
         run: python scripts/fetch_garmin.py
 
       - name: Upload CSV to Flask server
