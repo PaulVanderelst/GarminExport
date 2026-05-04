@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from datetime import date, timedelta
 from garminconnect import Garmin
+import time
 
 EMAIL    = os.environ["GARMIN_EMAIL"]
 PASSWORD = os.environ["GARMIN_PASSWORD"]
@@ -18,6 +19,19 @@ FIELDS = [
     "averageHR", "maxHR", "calories",
     "averageSpeed", "maxSpeed", "elevationGain",
 ]
+
+def login_with_retry(client: Garmin, retries: int = 3, delay: int = 10):
+    for attempt in range(retries):
+        try:
+            client.login()
+            return
+        except Exception as e:
+            if "429" in str(e) and attempt < retries - 1:
+                print(f"⚠️  Rate limited, retry dans {delay}s...")
+                time.sleep(delay)
+                delay *= 2  # backoff exponentiel
+            else:
+                raise
 
 def fetch_new_activities(client: Garmin, existing_ids: set) -> list[dict]:
     """Récupère les activités des 30 derniers jours non encore enregistrées."""
@@ -51,6 +65,7 @@ def save_csv(path: Path, rows: list[dict]):
 
 def main():
     client = Garmin(EMAIL, PASSWORD)
+    login_with_retry(client)
     client.login()
 
     existing_rows, existing_ids = load_existing(OUTPUT)
