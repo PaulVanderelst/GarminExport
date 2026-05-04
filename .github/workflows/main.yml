@@ -1,32 +1,37 @@
-name: Export data Garmin
+name: Sync Garmin Activities
 
 on:
   schedule:
-    # Schedule the script using cron syntax (e.g., every day at midnight)
-     - cron: '0 16-22 * * 1-5'  # Weekdays (Monday to Friday) from 16:00 to 22:00
-     - cron: '0 9-20 * * 6,0'   # Weekends (Saturday and Sunday) from 09:00 to 20:00
-  workflow_dispatch: # Allows manual triggering of the workflow
-    {}
+    - cron: '0 16-22 * * 1-5'  # Lundi–vendredi, 16h–22h UTC
+    - cron: '0 9-20 * * 6,0'   # Samedi–dimanche, 9h–20h UTC
+  workflow_dispatch:
 
 jobs:
-  run-script:
+  sync:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9' # Specify the Python version you need
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install garminconnect
-        pip install -r requirements.txt # Ensure your repo has a requirements.txt file if dependencies are needed
+      - name: Install dependencies
+        run: pip install garminconnect pandas
 
-    - name: Run Python script
-      run: |
-        python main.py
+      - name: Fetch Garmin activities
+        env:
+          GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
+          GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+        run: python scripts/fetch_garmin.py
+
+      - name: Commit & push CSV
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/activities.csv
+          git diff --staged --quiet || git commit -m "chore: update Garmin activities $(date -u +%Y-%m-%d)"
+          git push
