@@ -32,7 +32,11 @@ jobs:
       - name: Upload CSV to Flask server
         env:
           FLASK_UPLOAD_URL: ${{ secrets.FLASK_UPLOAD_URL }}
+          # Jeton facultatif : même valeur que la variable UPLOAD_TOKEN du site (fichier WSGI).
+          # Secret absent ou vide : l'envoi reste accepté tant que le jeton n'est pas activé sur le site, puis il est refusé.
+          UPLOAD_TOKEN: ${{ secrets.UPLOAD_TOKEN }}
         run: |
           curl -X POST "$FLASK_UPLOAD_URL/upload" \
+            -H "X-Upload-Token: $UPLOAD_TOKEN" \
             -F "file=@data/garmin_activities.csv" \
             --fail-with-body
