@@ -139,6 +139,15 @@ def fetch_activities_since(client: Garmin, since: date, existing_ids: set) -> li
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
+def _sortie_github(cle, valeur):
+    """Écrit une sortie pour le workflow (ex: `nouveau=true`), pour que l'étape
+    d'upload puisse être sautée quand il n'y a rien de neuf à envoyer."""
+    chemin = os.environ.get("GITHUB_OUTPUT")
+    if chemin:
+        with open(chemin, "a", encoding="utf-8") as f:
+            f.write(f"{cle}={valeur}\n")
+
+
 def main():
     # 1. Récupérer le CSV actuel depuis Flask
     if FLASK_URL:
@@ -156,6 +165,7 @@ def main():
 
     if oldest_missing is None:
         print("✅ Tout est à jour, aucune nouvelle activité.")
+        _sortie_github("nouveau", "false")
         return
 
     print(f"📅 Première activité manquante détectée : {oldest_missing}")
@@ -165,6 +175,7 @@ def main():
 
     if not new_rows:
         print("ℹ️  Aucune nouvelle activité après filtrage.")
+        _sortie_github("nouveau", "false")
         return
 
     print(f"✅ {len(new_rows)} nouvelle(s) activité(s) à ajouter")
@@ -174,6 +185,7 @@ def main():
     all_rows.sort(key=lambda r: r.get("startTimeLocal", ""), reverse=True)
     save_csv(OUTPUT, all_rows)
     print(f"💾 CSV sauvegardé ({len(all_rows)} activités au total)")
+    _sortie_github("nouveau", "true")
 
 
 if __name__ == "__main__":

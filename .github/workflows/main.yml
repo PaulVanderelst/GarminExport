@@ -23,13 +23,18 @@ jobs:
         run: pip install garminconnect pandas
 
       - name: Fetch Garmin activities
+        id: fetch
         env:
           GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
           GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
           FLASK_UPLOAD_URL: ${{ secrets.FLASK_UPLOAD_URL }}
         run: python scripts/fetch_garmin.py
 
+      # Seulement si une nouvelle activité a été trouvée : évite de renvoyer
+      # au serveur le même CSV inchangé à chaque passage (et de rafraîchir à
+      # tort la date de dernière synchro affichée sur le site).
       - name: Upload CSV to Flask server
+        if: steps.fetch.outputs.nouveau == 'true'
         env:
           FLASK_UPLOAD_URL: ${{ secrets.FLASK_UPLOAD_URL }}
           # Jeton facultatif : même valeur que la variable UPLOAD_TOKEN du site (fichier WSGI).
