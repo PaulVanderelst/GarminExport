@@ -2,8 +2,11 @@ name: Sync Garmin Activities
 
 on:
   schedule:
-    - cron: '0 16-22 * * 1-5'  # Lundi–vendredi, 16h–22h UTC
-    - cron: '0 9-20 * * 6,0'   # Samedi–dimanche, 9h–20h UTC
+    # Minute 7 (pas 0) : GitHub documente que les débuts d'heure sont les
+    # moments de plus forte charge pour les workflows planifiés, et donc
+    # les plus susceptibles d'être retardés ou sautés.
+    - cron: '7 16-22 * * 1-5'  # Lundi–vendredi, 16h–22h UTC
+    - cron: '7 9-20 * * 6,0'   # Samedi–dimanche, 9h–20h UTC
   workflow_dispatch:
 
 jobs:
